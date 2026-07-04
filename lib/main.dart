@@ -57,7 +57,7 @@ class SubZipApp extends StatelessWidget {
       title: 'SubZip',
       debugShowCheckedModeBanner: false,
       themeMode: appState.themeMode,
-      
+
       // Light Theme
       theme: ThemeData(
         useMaterial3: true,
@@ -77,14 +77,16 @@ class SubZipApp extends StatelessWidget {
         cardTheme: CardThemeData(
           color: Colors.white,
           elevation: 1,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
         ),
         navigationBarTheme: NavigationBarThemeData(
           backgroundColor: Colors.white,
           elevation: 8,
           labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
           height: 65,
-          indicatorColor: accentColor.withOpacity(0.15),
+          indicatorColor: accentColor.withValues(alpha: 0.15),
         ),
       ),
 
@@ -109,14 +111,16 @@ class SubZipApp extends StatelessWidget {
         cardTheme: CardThemeData(
           color: const Color(0xFF161616),
           elevation: 0,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
         ),
         navigationBarTheme: NavigationBarThemeData(
           backgroundColor: const Color(0xFF0A0A0A),
           elevation: 0,
           labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
           height: 65,
-          indicatorColor: accentColor.withOpacity(0.2),
+          indicatorColor: accentColor.withValues(alpha: 0.2),
         ),
       ),
       home: const HomeScreen(),

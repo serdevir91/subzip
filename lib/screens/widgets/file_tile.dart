@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import '../../models/shared_file.dart';
 import '../../models/folder_style.dart';
+import '../../services/thumbnail_service.dart';
 
 class FileTile extends StatelessWidget {
   final SharedFile file;
@@ -32,7 +33,7 @@ class FileTile extends StatelessWidget {
     if (Platform.isWindows && file.path.endsWith(':\\')) {
       return Icons.storage_rounded;
     }
-    
+
     if (file.isDirectory) {
       if (folderStyle != null) {
         switch (folderStyle!.iconType) {
@@ -103,7 +104,7 @@ class FileTile extends StatelessWidget {
     if (Platform.isWindows && file.path.endsWith(':\\')) {
       return theme.colorScheme.primary;
     }
-    
+
     if (file.isDirectory) {
       if (folderStyle != null) {
         final hex = folderStyle!.colorHex.replaceAll('#', '');
@@ -137,23 +138,95 @@ class FileTile extends StatelessWidget {
       case '.xlsx':
         return Colors.green.shade400;
       default:
-        return theme.colorScheme.onSurfaceVariant.withOpacity(0.7);
+        return theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7);
     }
   }
 
+  Widget _buildPreview({
+    required ThemeData theme,
+    required IconData iconData,
+    required Color iconColor,
+    required double size,
+  }) {
+    if (!file.isDirectory &&
+        !file.path.endsWith(':\\') &&
+        ThumbnailService.isImagePath(file.path) &&
+        File(file.path).existsSync()) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Image.file(
+          File(file.path),
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) =>
+              Icon(iconData, color: iconColor, size: size * 0.72),
+        ),
+      );
+    }
+
+    if (!file.isDirectory &&
+        !file.path.endsWith(':\\') &&
+        ThumbnailService.isVideoPath(file.path)) {
+      return FutureBuilder(
+        future: ThumbnailService.videoThumbnail(file.path),
+        builder: (context, snapshot) {
+          final bytes = snapshot.data;
+          if (bytes == null) {
+            return Icon(iconData, color: iconColor, size: size * 0.72);
+          }
+          return Stack(
+            alignment: Alignment.center,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: Image.memory(
+                  bytes,
+                  width: size,
+                  height: size,
+                  fit: BoxFit.cover,
+                ),
+              ),
+              Container(
+                width: size * 0.34,
+                height: size * 0.34,
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.play_arrow_rounded,
+                  color: Colors.white,
+                  size: size * 0.26,
+                ),
+              ),
+            ],
+          );
+        },
+      );
+    }
+
+    return Icon(iconData, color: iconColor, size: size * 0.72);
+  }
+
   void _showRightClickMenu(BuildContext context, TapUpDetails details) {
-    final RenderBox overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final RenderBox overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox;
     final position = RelativeRect.fromRect(
-      Rect.fromPoints(
-        details.globalPosition,
-        details.globalPosition,
-      ),
+      Rect.fromPoints(details.globalPosition, details.globalPosition),
       Offset.zero & overlay.size,
     );
-    
+
     final ext = p.extension(file.path).toLowerCase();
     final isZip = ext == '.zip';
-    final canConvertToPdf = ['.docx', '.pptx', '.jpg', '.jpeg', '.png', '.webp'].contains(ext);
+    final canConvertToPdf = [
+      '.docx',
+      '.pptx',
+      '.jpg',
+      '.jpeg',
+      '.png',
+      '.webp',
+    ].contains(ext);
     final canConvertToWord = ext == '.pdf';
 
     showMenu<String>(
@@ -176,7 +249,10 @@ class FileTile extends StatelessWidget {
           value: 'favorite',
           child: Row(
             children: [
-              Icon(isFavorite ? Icons.star_rounded : Icons.star_outline_rounded, size: 20),
+              Icon(
+                isFavorite ? Icons.star_rounded : Icons.star_outline_rounded,
+                size: 20,
+              ),
               SizedBox(width: 8),
               Text(isFavorite ? 'Remove Favorite' : 'Add Favorite'),
             ],
@@ -230,6 +306,16 @@ class FileTile extends StatelessWidget {
           const PopupMenuDivider(),
         ],
         const PopupMenuItem(
+          value: 'share',
+          child: Row(
+            children: [
+              Icon(Icons.share_rounded, size: 20),
+              SizedBox(width: 8),
+              Text('Share'),
+            ],
+          ),
+        ),
+        const PopupMenuItem(
           value: 'copy',
           child: Row(
             children: [
@@ -274,7 +360,11 @@ class FileTile extends StatelessWidget {
           value: 'delete',
           child: Row(
             children: [
-              Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 20),
+              Icon(
+                Icons.delete_outline_rounded,
+                color: Colors.redAccent,
+                size: 20,
+              ),
               SizedBox(width: 8),
               Text('Delete', style: TextStyle(color: Colors.redAccent)),
             ],
@@ -301,7 +391,9 @@ class FileTile extends StatelessWidget {
         onSecondaryTapUp: (details) => _showRightClickMenu(context, details),
         child: Card(
           color: isSelected
-              ? theme.colorScheme.primary.withOpacity(isDark ? 0.15 : 0.08)
+              ? theme.colorScheme.primary.withValues(
+                  alpha: isDark ? 0.15 : 0.08,
+                )
               : (isDark ? const Color(0xFF1E1E1E) : Colors.white),
           elevation: isSelected ? 4 : 1,
           shape: RoundedRectangleBorder(
@@ -358,12 +450,13 @@ class FileTile extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Center(
-                          child: Icon(
-                            iconData,
-                            color: iconColor,
-                            size: 48,
-                      ),
-                    ),
+                          child: _buildPreview(
+                            theme: theme,
+                            iconData: iconData,
+                            iconColor: iconColor,
+                            size: 64,
+                          ),
+                        ),
                       ),
                       const SizedBox(height: 8),
                       Text(
@@ -403,7 +496,9 @@ class FileTile extends StatelessWidget {
         margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         decoration: BoxDecoration(
           color: isSelected
-              ? theme.colorScheme.primary.withOpacity(isDark ? 0.15 : 0.08)
+              ? theme.colorScheme.primary.withValues(
+                  alpha: isDark ? 0.15 : 0.08,
+                )
               : (isDark ? const Color(0xFF1E1E1E) : Colors.white),
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
@@ -414,7 +509,9 @@ class FileTile extends StatelessWidget {
           ),
         ),
         child: ListTile(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
           onTap: onTap,
           onLongPress: onLongPress,
           leading: isSelectionMode
@@ -427,10 +524,11 @@ class FileTile extends StatelessWidget {
               : Stack(
                   alignment: Alignment.center,
                   children: [
-                    Icon(
-                      iconData,
-                      color: iconColor,
-                      size: 32,
+                    _buildPreview(
+                      theme: theme,
+                      iconData: iconData,
+                      iconColor: iconColor,
+                      size: 44,
                     ),
                     if (isFavorite)
                       Positioned(
@@ -458,7 +556,9 @@ class FileTile extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
           ),
           subtitle: Text(
-            file.isDirectory ? 'Folder' : '${file.sizeFormatted} • ${file.dateFormatted}',
+            file.isDirectory
+                ? 'Folder'
+                : '${file.sizeFormatted} • ${file.dateFormatted}',
             style: TextStyle(fontSize: 11, color: theme.colorScheme.outline),
           ),
           trailing: isSelectionMode ? null : _buildPopupMenuButton(context),
@@ -471,14 +571,18 @@ class FileTile extends StatelessWidget {
     final theme = Theme.of(context);
     final ext = p.extension(file.path).toLowerCase();
     final isZip = ext == '.zip';
-    final canConvertToPdf = ['.docx', '.pptx', '.jpg', '.jpeg', '.png', '.webp'].contains(ext);
+    final canConvertToPdf = [
+      '.docx',
+      '.pptx',
+      '.jpg',
+      '.jpeg',
+      '.png',
+      '.webp',
+    ].contains(ext);
     final canConvertToWord = ext == '.pdf';
 
     return PopupMenuButton<String>(
-      icon: Icon(
-        Icons.more_vert_rounded,
-        color: theme.colorScheme.outline,
-      ),
+      icon: Icon(Icons.more_vert_rounded, color: theme.colorScheme.outline),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       onSelected: onActionSelected,
       itemBuilder: (context) => [
@@ -497,7 +601,10 @@ class FileTile extends StatelessWidget {
           value: 'favorite',
           child: Row(
             children: [
-              Icon(isFavorite ? Icons.star_rounded : Icons.star_outline_rounded, size: 20),
+              Icon(
+                isFavorite ? Icons.star_rounded : Icons.star_outline_rounded,
+                size: 20,
+              ),
               SizedBox(width: 8),
               Text(isFavorite ? 'Remove Favorite' : 'Add Favorite'),
             ],
@@ -551,6 +658,16 @@ class FileTile extends StatelessWidget {
           const PopupMenuDivider(),
         ],
         const PopupMenuItem(
+          value: 'share',
+          child: Row(
+            children: [
+              Icon(Icons.share_rounded, size: 20),
+              SizedBox(width: 8),
+              Text('Share'),
+            ],
+          ),
+        ),
+        const PopupMenuItem(
           value: 'copy',
           child: Row(
             children: [
@@ -595,7 +712,11 @@ class FileTile extends StatelessWidget {
           value: 'delete',
           child: Row(
             children: [
-              Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 20),
+              Icon(
+                Icons.delete_outline_rounded,
+                color: Colors.redAccent,
+                size: 20,
+              ),
               SizedBox(width: 8),
               Text('Delete', style: TextStyle(color: Colors.redAccent)),
             ],

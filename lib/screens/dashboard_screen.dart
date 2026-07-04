@@ -10,7 +10,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../providers/file_system_provider.dart';
 import '../providers/app_state_provider.dart';
+import '../models/file_category.dart';
 import '../models/shared_file.dart';
+import '../services/thumbnail_service.dart';
 
 class _TypeSummary {
   final int count;
@@ -41,52 +43,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<SharedFile> _cachedLargest = [];
   List<SharedFile> _cachedRecent = [];
   bool _isScanning = false;
-  Map<String, _TypeSummary> _typeSummaries = const {
-    'images': _TypeSummary(count: 0, bytes: 0),
-    'videos': _TypeSummary(count: 0, bytes: 0),
-    'audio': _TypeSummary(count: 0, bytes: 0),
-    'documents': _TypeSummary(count: 0, bytes: 0),
-    'apk': _TypeSummary(count: 0, bytes: 0),
+  Map<String, _TypeSummary> _typeSummaries = {
+    for (final category in FileCategory.builtInCategories)
+      category.id: const _TypeSummary(count: 0, bytes: 0),
   };
-
-  static const Set<String> _imageExtensions = {
-    '.jpg',
-    '.jpeg',
-    '.png',
-    '.gif',
-    '.bmp',
-    '.webp',
-    '.heic',
-  };
-  static const Set<String> _videoExtensions = {
-    '.mp4',
-    '.mkv',
-    '.avi',
-    '.mov',
-    '.webm',
-    '.3gp',
-  };
-  static const Set<String> _audioExtensions = {
-    '.mp3',
-    '.wav',
-    '.ogg',
-    '.m4a',
-    '.flac',
-    '.aac',
-  };
-  static const Set<String> _documentExtensions = {
-    '.pdf',
-    '.doc',
-    '.docx',
-    '.xls',
-    '.xlsx',
-    '.ppt',
-    '.pptx',
-    '.txt',
-    '.rtf',
-    '.csv',
-  };
-  static const Set<String> _apkExtensions = {'.apk', '.xapk', '.apks'};
 
   @override
   void initState() {
@@ -221,6 +181,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       const rootDir = '/storage/emulated/0';
       final subDirs = [
         'Download',
+        'Downloads',
         'Documents',
         'DCIM',
         'Pictures',
@@ -259,16 +220,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     }
 
-    int imageCount = 0,
-        videoCount = 0,
-        audioCount = 0,
-        docCount = 0,
-        apkCount = 0;
-    int imageBytes = 0,
-        videoBytes = 0,
-        audioBytes = 0,
-        docBytes = 0,
-        apkBytes = 0;
+    final summaryCounts = <String, int>{
+      for (final category in FileCategory.builtInCategories) category.id: 0,
+    };
+    final summaryBytes = <String, int>{
+      for (final category in FileCategory.builtInCategories) category.id: 0,
+    };
 
     int totalCount = 0;
     const maxFiles = 12000;
@@ -288,8 +245,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           final name = p.basename(entityPath);
 
           // Skip hidden files/directories and system folders
-          if (name.startsWith('.') ||
-              entityPath.contains('${Platform.pathSeparator}.') ||
+          if ((!fileSystem.showHiddenFiles && _isHiddenPath(entityPath)) ||
               entityPath.contains('Android/data') ||
               entityPath.contains('Android/obb')) {
             continue;
@@ -298,7 +254,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           if (entity is File) {
             try {
               final stat = entity.statSync();
-              final ext = p.extension(entityPath).toLowerCase();
               allFiles.add(
                 SharedFile(
                   name: name,
@@ -308,21 +263,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   dateModified: stat.modified,
                 ),
               );
-              if (_imageExtensions.contains(ext)) {
-                imageCount++;
-                imageBytes += stat.size;
-              } else if (_videoExtensions.contains(ext)) {
-                videoCount++;
-                videoBytes += stat.size;
-              } else if (_audioExtensions.contains(ext)) {
-                audioCount++;
-                audioBytes += stat.size;
-              } else if (_documentExtensions.contains(ext)) {
-                docCount++;
-                docBytes += stat.size;
-              } else if (_apkExtensions.contains(ext)) {
-                apkCount++;
-                apkBytes += stat.size;
+              for (final category in FileCategory.builtInCategories) {
+                if (category.matchesPath(entityPath, isDirectory: false)) {
+                  summaryCounts[category.id] = summaryCounts[category.id]! + 1;
+                  summaryBytes[category.id] =
+                      summaryBytes[category.id]! + stat.size;
+                  break;
+                }
               }
               totalCount++;
             } catch (_) {}
@@ -341,11 +288,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       'largest': largest.take(5).toList(),
       'recent': recent.take(5).toList(),
       'summaries': <String, _TypeSummary>{
-        'images': _TypeSummary(count: imageCount, bytes: imageBytes),
-        'videos': _TypeSummary(count: videoCount, bytes: videoBytes),
-        'audio': _TypeSummary(count: audioCount, bytes: audioBytes),
-        'documents': _TypeSummary(count: docCount, bytes: docBytes),
-        'apk': _TypeSummary(count: apkCount, bytes: apkBytes),
+        for (final category in FileCategory.builtInCategories)
+          category.id: _TypeSummary(
+            count: summaryCounts[category.id] ?? 0,
+            bytes: summaryBytes[category.id] ?? 0,
+          ),
       },
     };
 
@@ -369,6 +316,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     const suffixes = ['B', 'KB', 'MB', 'GB', 'TB'];
     var i = (log(bytes) / log(1024)).floor();
     return '${(bytes / pow(1024, i)).toStringAsFixed(1)} ${suffixes[i]}';
+  }
+
+  bool _isHiddenPath(String path) {
+    final segments = p
+        .split(p.normalize(path))
+        .where((segment) => segment.isNotEmpty)
+        .toList();
+    return segments.any((segment) => segment.startsWith('.'));
   }
 
   String _resolveDownloadsPath() {
@@ -457,6 +412,69 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  Widget _buildFolderCategoryCard({
+    required BuildContext context,
+    required AppStateProvider appState,
+    required String label,
+    required String path,
+  }) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () => widget.onNavigateToFolder(path),
+        child: Container(
+          width: 130,
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: isDark ? const Color(0x18FFFFFF) : Colors.grey.shade200,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.folder_special_rounded, color: appState.accentColor),
+              const SizedBox(height: 6),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Folder category',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: theme.colorScheme.outline,
+                ),
+              ),
+              Text(
+                p.basename(path).isEmpty ? path : p.basename(path),
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  color: appState.accentColor,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   IconData _getFileIcon(String name) {
     final ext = p.extension(name).toLowerCase();
     switch (ext) {
@@ -493,6 +511,65 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  Widget _buildFilePreview(SharedFile file, AppStateProvider appState) {
+    final icon = _getFileIcon(file.name);
+    if (ThumbnailService.isImagePath(file.path) &&
+        File(file.path).existsSync()) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: Image.file(
+          File(file.path),
+          width: 40,
+          height: 40,
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) => CircleAvatar(
+            backgroundColor: appState.accentColor.withValues(alpha: 0.08),
+            child: Icon(icon, color: appState.accentColor, size: 20),
+          ),
+        ),
+      );
+    }
+
+    if (ThumbnailService.isVideoPath(file.path)) {
+      return FutureBuilder(
+        future: ThumbnailService.videoThumbnail(file.path),
+        builder: (context, snapshot) {
+          final bytes = snapshot.data;
+          if (bytes == null) {
+            return CircleAvatar(
+              backgroundColor: appState.accentColor.withValues(alpha: 0.08),
+              child: Icon(icon, color: appState.accentColor, size: 20),
+            );
+          }
+          return Stack(
+            alignment: Alignment.center,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(20),
+                child: Image.memory(
+                  bytes,
+                  width: 40,
+                  height: 40,
+                  fit: BoxFit.cover,
+                ),
+              ),
+              const Icon(
+                Icons.play_arrow_rounded,
+                color: Colors.white,
+                size: 18,
+              ),
+            ],
+          );
+        },
+      );
+    }
+
+    return CircleAvatar(
+      backgroundColor: appState.accentColor.withValues(alpha: 0.08),
+      child: Icon(icon, color: appState.accentColor, size: 20),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -511,50 +588,65 @@ class _DashboardScreenState extends State<DashboardScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // 1. Welcome Card
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      appState.accentColor,
-                      appState.accentColor.withOpacity(0.7),
+              if (appState.showWelcomeCard) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        appState.accentColor,
+                        appState.accentColor.withValues(alpha: 0.7),
+                      ],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: appState.accentColor.withValues(alpha: 0.3),
+                        blurRadius: 12,
+                        offset: const Offset(0, 6),
+                      ),
                     ],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
                   ),
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: appState.accentColor.withOpacity(0.3),
-                      blurRadius: 12,
-                      offset: const Offset(0, 6),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Welcome to SubZip',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Welcome to SubZip',
+                              style: TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'Manage, compress and convert your files offline.',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.white.withValues(alpha: 0.9),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Hide welcome card',
                         color: Colors.white,
+                        onPressed: () => appState.setShowWelcomeCard(false),
+                        icon: const Icon(Icons.close_rounded),
                       ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Manage, compress and convert your files offline.',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.white.withOpacity(0.9),
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(height: 24),
+                const SizedBox(height: 24),
+              ],
 
               const Text(
                 'Categories',
@@ -565,45 +657,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 scrollDirection: Axis.horizontal,
                 child: Row(
                   children: [
-                    _buildTypeCard(
-                      context: context,
-                      appState: appState,
-                      label: 'Photos',
-                      icon: Icons.photo_library_rounded,
-                      summary: _typeSummaries['images']!,
-                      categoryKey: 'images',
+                    ...FileCategory.builtInCategories.map(
+                      (category) => _buildTypeCard(
+                        context: context,
+                        appState: appState,
+                        label: category.label,
+                        icon: FileCategory.iconFor(category.iconName),
+                        summary:
+                            _typeSummaries[category.id] ??
+                            const _TypeSummary(count: 0, bytes: 0),
+                        categoryKey: category.id,
+                      ),
                     ),
-                    _buildTypeCard(
-                      context: context,
-                      appState: appState,
-                      label: 'Videos',
-                      icon: Icons.video_collection_rounded,
-                      summary: _typeSummaries['videos']!,
-                      categoryKey: 'videos',
-                    ),
-                    _buildTypeCard(
-                      context: context,
-                      appState: appState,
-                      label: 'Audio',
-                      icon: Icons.music_note_rounded,
-                      summary: _typeSummaries['audio']!,
-                      categoryKey: 'audio',
-                    ),
-                    _buildTypeCard(
-                      context: context,
-                      appState: appState,
-                      label: 'Documents',
-                      icon: Icons.description_rounded,
-                      summary: _typeSummaries['documents']!,
-                      categoryKey: 'documents',
-                    ),
-                    _buildTypeCard(
-                      context: context,
-                      appState: appState,
-                      label: 'APK',
-                      icon: Icons.android_rounded,
-                      summary: _typeSummaries['apk']!,
-                      categoryKey: 'apk',
+                    ...appState.customCategories.map(
+                      (category) => _buildFolderCategoryCard(
+                        context: context,
+                        appState: appState,
+                        label: category.label,
+                        path: category.folderPath ?? '',
+                      ),
                     ),
                     Padding(
                       padding: const EdgeInsets.only(right: 8),
@@ -734,7 +806,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 CircleAvatar(
                                   radius: 24,
                                   backgroundColor: appState.accentColor
-                                      .withOpacity(0.12),
+                                      .withValues(alpha: 0.12),
                                   child: Icon(
                                     Icons.storage_rounded,
                                     color: appState.accentColor,
@@ -859,6 +931,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       appState: appState,
                       emptyText: 'No large files found.',
                       showSize: true,
+                      initiallyExpanded: appState.largestExpanded,
+                      onExpansionChanged: appState.setLargestExpanded,
                     ),
                     const SizedBox(height: 24),
                     // Recent Files Card Section
@@ -870,6 +944,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       appState: appState,
                       emptyText: 'No recent files found.',
                       showSize: false,
+                      initiallyExpanded: appState.recentExpanded,
+                      onExpansionChanged: appState.setRecentExpanded,
                     ),
                   ],
                 ],
@@ -889,26 +965,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
     required AppStateProvider appState,
     required String emptyText,
     required bool showSize,
+    required bool initiallyExpanded,
+    required ValueChanged<bool> onExpansionChanged,
   }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
+    return Card(
+      color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: isDark ? const Color(0x0EFFFFFF) : Colors.grey.shade200,
+        ),
+      ),
+      child: ExpansionTile(
+        key: PageStorageKey(title),
+        initiallyExpanded: initiallyExpanded,
+        onExpansionChanged: onExpansionChanged,
+        title: Text(
           title,
           style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
-        const SizedBox(height: 10),
-        if (files.isEmpty)
-          Card(
-            color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-              side: BorderSide(
-                color: isDark ? const Color(0x0EFFFFFF) : Colors.grey.shade200,
-              ),
-            ),
-            child: Container(
-              width: double.infinity,
+        subtitle: Text(
+          files.isEmpty ? emptyText : '${files.length} files',
+          style: TextStyle(fontSize: 12, color: theme.colorScheme.outline),
+        ),
+        children: [
+          if (files.isEmpty)
+            Padding(
               padding: const EdgeInsets.all(20.0),
               child: Center(
                 child: Text(
@@ -919,72 +1001,70 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                 ),
               ),
-            ),
-          )
-        else
-          Card(
-            color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-              side: BorderSide(
-                color: isDark ? const Color(0x0EFFFFFF) : Colors.grey.shade200,
+            )
+          else
+            Container(
+              color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (var index = 0; index < files.length; index++) ...[
+                    _buildDashboardFileTile(
+                      file: files[index],
+                      theme: theme,
+                      appState: appState,
+                      showSize: showSize,
+                    ),
+                    if (index < files.length - 1)
+                      Divider(
+                        height: 1,
+                        color: isDark
+                            ? const Color(0x0EFFFFFF)
+                            : Colors.grey.shade100,
+                      ),
+                  ],
+                ],
               ),
             ),
-            child: ListView.separated(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: files.length,
-              separatorBuilder: (context, index) => Divider(
-                height: 1,
-                color: isDark ? const Color(0x0EFFFFFF) : Colors.grey.shade100,
-              ),
-              itemBuilder: (context, index) {
-                final file = files[index];
-                return ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: appState.accentColor.withOpacity(0.08),
-                    child: Icon(
-                      _getFileIcon(file.name),
-                      color: appState.accentColor,
-                      size: 20,
-                    ),
-                  ),
-                  title: Text(
-                    file.name,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 13,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  subtitle: Text(
-                    file.path,
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: theme.colorScheme.outline,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  trailing: Text(
-                    showSize
-                        ? file.sizeFormatted
-                        : file.dateFormatted.split(' ')[0],
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: theme.colorScheme.outline,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  onTap: () async {
-                    await OpenFilex.open(file.path);
-                  },
-                );
-              },
-            ),
-          ),
-      ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDashboardFileTile({
+    required SharedFile file,
+    required ThemeData theme,
+    required AppStateProvider appState,
+    required bool showSize,
+  }) {
+    return ListTile(
+      tileColor: theme.brightness == Brightness.dark
+          ? const Color(0xFF1E1E1E)
+          : Colors.white,
+      leading: _buildFilePreview(file, appState),
+      title: Text(
+        file.name,
+        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      subtitle: Text(
+        file.path,
+        style: TextStyle(fontSize: 10, color: theme.colorScheme.outline),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: Text(
+        showSize ? file.sizeFormatted : file.dateFormatted.split(' ')[0],
+        style: TextStyle(
+          fontSize: 11,
+          color: theme.colorScheme.outline,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      onTap: () async {
+        await OpenFilex.open(file.path);
+      },
     );
   }
 }

@@ -89,7 +89,7 @@ class TasksScreen extends StatelessWidget {
                   Icon(
                     Icons.task_rounded,
                     size: 64,
-                    color: theme.colorScheme.outline.withOpacity(0.5),
+                    color: theme.colorScheme.outline.withValues(alpha: 0.5),
                   ),
                   const SizedBox(height: 16),
                   const Text(
@@ -166,7 +166,9 @@ class TasksScreen extends StatelessWidget {
                           Row(
                             children: [
                               CircleAvatar(
-                                backgroundColor: statusColor.withOpacity(0.15),
+                                backgroundColor: statusColor.withValues(
+                                  alpha: 0.15,
+                                ),
                                 child: Icon(
                                   _getTaskIcon(task.type),
                                   color: statusColor,
@@ -195,8 +197,8 @@ class TasksScreen extends StatelessWidget {
                                             vertical: 2,
                                           ),
                                           decoration: BoxDecoration(
-                                            color: statusColor.withOpacity(
-                                              0.12,
+                                            color: statusColor.withValues(
+                                              alpha: 0.12,
                                             ),
                                             borderRadius: BorderRadius.circular(
                                               6,

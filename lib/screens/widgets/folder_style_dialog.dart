@@ -114,10 +114,10 @@ class _FolderStyleDialogState extends State<FolderStyleDialog> {
                         boxShadow: isSelected
                             ? [
                                 BoxShadow(
-                                  color: color.withOpacity(0.5),
+                                  color: color.withValues(alpha: 0.5),
                                   blurRadius: 8,
                                   spreadRadius: 2,
-                                )
+                                ),
                               ]
                             : null,
                       ),
@@ -150,10 +150,12 @@ class _FolderStyleDialogState extends State<FolderStyleDialog> {
                 final isSelected = _selectedIconType == type;
 
                 // Color derived from selection
-                final baseColor = _colors.firstWhere(
-                  (c) => c['hex'] == _selectedColorHex,
-                  orElse: () => _colors[0],
-                )['color'] as Color;
+                final baseColor =
+                    _colors.firstWhere(
+                          (c) => c['hex'] == _selectedColorHex,
+                          orElse: () => _colors[0],
+                        )['color']
+                        as Color;
 
                 return GestureDetector(
                   onTap: () {
@@ -164,8 +166,10 @@ class _FolderStyleDialogState extends State<FolderStyleDialog> {
                   child: Container(
                     decoration: BoxDecoration(
                       color: isSelected
-                          ? baseColor.withOpacity(0.15)
-                          : (isDark ? const Color(0xFF2C2C2C) : Colors.grey.shade100),
+                          ? baseColor.withValues(alpha: 0.15)
+                          : (isDark
+                                ? const Color(0xFF2C2C2C)
+                                : Colors.grey.shade100),
                       borderRadius: BorderRadius.circular(16),
                       border: Border.all(
                         color: isSelected ? baseColor : Colors.transparent,
@@ -177,7 +181,9 @@ class _FolderStyleDialogState extends State<FolderStyleDialog> {
                       children: [
                         Icon(
                           iconData,
-                          color: isSelected ? baseColor : (isDark ? Colors.grey : Colors.grey.shade600),
+                          color: isSelected
+                              ? baseColor
+                              : (isDark ? Colors.grey : Colors.grey.shade600),
                           size: 28,
                         ),
                         const SizedBox(height: 4),
@@ -185,7 +191,9 @@ class _FolderStyleDialogState extends State<FolderStyleDialog> {
                           label,
                           style: TextStyle(
                             fontSize: 10,
-                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                            fontWeight: isSelected
+                                ? FontWeight.bold
+                                : FontWeight.normal,
                             color: isSelected
                                 ? baseColor
                                 : (isDark ? Colors.white70 : Colors.black87),
@@ -219,10 +227,12 @@ class _FolderStyleDialogState extends State<FolderStyleDialog> {
         ),
         ElevatedButton(
           style: ElevatedButton.styleFrom(
-            backgroundColor: _colors.firstWhere(
-              (c) => c['hex'] == _selectedColorHex,
-              orElse: () => _colors[0],
-            )['color'] as Color,
+            backgroundColor:
+                _colors.firstWhere(
+                      (c) => c['hex'] == _selectedColorHex,
+                      orElse: () => _colors[0],
+                    )['color']
+                    as Color,
             foregroundColor: Colors.white,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),

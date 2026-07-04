@@ -9,19 +9,19 @@ import 'widgets/file_tile.dart';
 class FavoritesScreen extends StatelessWidget {
   final Function(String path) onNavigateToFolder;
 
-  const FavoritesScreen({
-    super.key,
-    required this.onNavigateToFolder,
-  });
+  const FavoritesScreen({super.key, required this.onNavigateToFolder});
 
-  List<SharedFile> _resolveFavorites(FileSystemProvider fileSystem, Set<String> paths) {
+  List<SharedFile> _resolveFavorites(
+    FileSystemProvider fileSystem,
+    Set<String> paths,
+  ) {
     final List<SharedFile> resolved = [];
     final List<String> toRemove = [];
     for (final path in paths) {
       try {
         final file = File(path);
         final dir = Directory(path);
-        
+
         if (dir.existsSync()) {
           resolved.add(SharedFile.fromFileSystemEntity(dir));
         } else if (file.existsSync()) {
@@ -46,11 +46,17 @@ class FavoritesScreen extends StatelessWidget {
     final fileSystem = Provider.of<FileSystemProvider>(context);
     final theme = Theme.of(context);
 
-    final favoriteFiles = _resolveFavorites(fileSystem, fileSystem.favoritePaths);
+    final favoriteFiles = _resolveFavorites(
+      fileSystem,
+      fileSystem.favoritePaths,
+    );
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Favorites', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text(
+          'Favorites',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
       ),
       body: favoriteFiles.isEmpty
           ? Center(
@@ -60,7 +66,7 @@ class FavoritesScreen extends StatelessWidget {
                   Icon(
                     Icons.star_outline_rounded,
                     size: 64,
-                    color: theme.colorScheme.outline.withOpacity(0.5),
+                    color: theme.colorScheme.outline.withValues(alpha: 0.5),
                   ),
                   const SizedBox(height: 16),
                   const Text(
@@ -83,7 +89,7 @@ class FavoritesScreen extends StatelessWidget {
               itemCount: favoriteFiles.length,
               itemBuilder: (context, index) {
                 final file = favoriteFiles[index];
-                
+
                 return FileTile(
                   file: file,
                   isSelected: false,
@@ -106,13 +112,21 @@ class FavoritesScreen extends StatelessWidget {
                       fileSystem.toggleSelection(file.path);
                       fileSystem.copySelected();
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Copied. Navigate to destination folder to paste.')),
+                        const SnackBar(
+                          content: Text(
+                            'Copied. Navigate to destination folder to paste.',
+                          ),
+                        ),
                       );
                     } else if (action == 'cut') {
                       fileSystem.toggleSelection(file.path);
                       fileSystem.cutSelected();
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Cut. Navigate to destination folder to paste.')),
+                        const SnackBar(
+                          content: Text(
+                            'Cut. Navigate to destination folder to paste.',
+                          ),
+                        ),
                       );
                     } else if (action == 'delete') {
                       await fileSystem.toggleFavorite(file.path);

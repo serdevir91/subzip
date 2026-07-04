@@ -28,6 +28,19 @@ class SharedFile {
     );
   }
 
+  factory SharedFile.fromPathLite({
+    required String path,
+    required bool isDirectory,
+  }) {
+    return SharedFile(
+      name: p.basename(path),
+      path: path,
+      size: 0,
+      dateModified: DateTime.now(),
+      isDirectory: isDirectory,
+    );
+  }
+
   String get sizeFormatted {
     if (isDirectory) return '';
     if (size <= 0) return '0 B';

@@ -6,17 +6,19 @@ import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:in_app_review/in_app_review.dart';
-import 'package:new_version_plus/new_version_plus.dart';
 
 import '../providers/app_state_provider.dart';
 import '../providers/file_system_provider.dart';
 import '../providers/task_provider.dart';
 import '../models/shared_file.dart';
+import '../services/age_signals_service.dart';
+import '../services/review_service.dart';
+import '../services/update_service.dart';
 import 'widgets/file_tile.dart';
 import 'widgets/breadcrumb_bar.dart';
 import 'widgets/folder_style_dialog.dart';
 import 'widgets/glass_panel.dart';
+import 'widgets/app_notification_banner.dart';
 import 'favorites_screen.dart';
 import 'tasks_screen.dart';
 import 'settings_screen.dart';
@@ -31,6 +33,14 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  static const String _keyNeverShowRatePrompt = 'never_show_rate_prompt';
+  static const String _keyRatePromptLaunchCount = 'rate_prompt_launch_count';
+  static const String _keyFirstUseEpochMs = 'first_use_epoch_ms';
+  static const String _keyLastRatePromptEpochMs = 'last_rate_prompt_epoch_ms';
+  static const int _minLaunchesBeforeRatePrompt = 4;
+  static const Duration _minUsageBeforeRatePrompt = Duration(minutes: 10);
+  static const Duration _ratePromptCooldown = Duration(days: 14);
+
   int _currentNavIndex = 0;
   final TextEditingController _searchController = TextEditingController();
   bool _showSearchFilters = false;
@@ -162,19 +172,51 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     await Future.delayed(const Duration(milliseconds: 350));
+    final ageGateShown = await _showAgeGateIfNeeded();
+    if (!mounted || ageGateShown) return;
     final updateShown = await _showUpdateDialogIfNeeded();
     if (!mounted || updateShown) return;
     await _showRateAppDialogIfNeeded();
   }
 
+  Future<bool> _showAgeGateIfNeeded() async {
+    try {
+      final ageSignals = await AgeSignalsService().checkAndCacheAgeSignals();
+      if (!mounted || ageSignals == null || !ageSignals.isAccessDenied) {
+        return false;
+      }
+
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Access Not Approved'),
+          content: const Text(
+            'This Google account is not approved to use SubZip right now.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+      return true;
+    } catch (e) {
+      debugPrint('Age signals check failed: $e');
+      return false;
+    }
+  }
+
   Future<bool> _showUpdateDialogIfNeeded() async {
     try {
-      final newVersion = NewVersionPlus(
-        androidId: 'www.subzip.app',
-        androidPlayStoreCountry: 'TR',
-      );
-      final status = await newVersion.getVersionStatus();
-      if (!mounted || status == null || !status.canUpdate) {
+      final updateService = UpdateService();
+      final status = await updateService.checkForUpdate();
+      if (!mounted ||
+          status == null ||
+          !status.storeVersionAvailable ||
+          !status.canUpdate) {
         return false;
       }
 
@@ -198,7 +240,12 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       );
       if (shouldUpdate == true) {
-        await newVersion.launchAppStore(status.appStoreLink);
+        final opened = await updateService.openUpdatePage(status);
+        if (!opened && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Update page could not be opened.')),
+          );
+        }
       }
       return true;
     } catch (e) {
@@ -209,39 +256,108 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _showRateAppDialogIfNeeded() async {
     final prefs = await SharedPreferences.getInstance();
-    final rated = prefs.getBool('has_rated_subzip') ?? false;
-    if (rated || !mounted) {
+    final now = DateTime.now();
+    final launchCount = (prefs.getInt(_keyRatePromptLaunchCount) ?? 0) + 1;
+    await prefs.setInt(_keyRatePromptLaunchCount, launchCount);
+
+    final firstUseEpochMs =
+        prefs.getInt(_keyFirstUseEpochMs) ?? now.millisecondsSinceEpoch;
+    if (!prefs.containsKey(_keyFirstUseEpochMs)) {
+      await prefs.setInt(_keyFirstUseEpochMs, firstUseEpochMs);
+    }
+
+    final neverShowPrompt = prefs.getBool(_keyNeverShowRatePrompt) ?? false;
+    if (neverShowPrompt || !mounted) {
       return;
     }
 
-    final shouldRate = await showDialog<bool>(
+    if (launchCount < _minLaunchesBeforeRatePrompt) {
+      return;
+    }
+
+    final firstUse = DateTime.fromMillisecondsSinceEpoch(firstUseEpochMs);
+    if (now.difference(firstUse) < _minUsageBeforeRatePrompt) {
+      return;
+    }
+
+    final lastPromptEpochMs = prefs.getInt(_keyLastRatePromptEpochMs);
+    if (lastPromptEpochMs != null) {
+      final lastPrompt = DateTime.fromMillisecondsSinceEpoch(lastPromptEpochMs);
+      if (now.difference(lastPrompt) < _ratePromptCooldown) {
+        return;
+      }
+    }
+
+    await prefs.setInt(_keyLastRatePromptEpochMs, now.millisecondsSinceEpoch);
+    if (!mounted) {
+      return;
+    }
+
+    final action = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Rate SubZip'),
-        content: const Text('Would you like to rate SubZip on Google Play?'),
+        content: const Text(
+          'If SubZip is helping you, please leave a rating and short review.',
+        ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Not now'),
+            onPressed: () => Navigator.pop(context, 'later'),
+            child: const Text('Later'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'never'),
+            child: const Text('Don\'t ask again'),
           ),
           ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Rate now'),
+            onPressed: () => Navigator.pop(context, 'rate'),
+            child: const Text('Rate & Review'),
           ),
         ],
       ),
     );
 
-    if (shouldRate != true) {
+    if (action == 'never') {
+      await prefs.setBool(_keyNeverShowRatePrompt, true);
       return;
     }
 
-    try {
-      final inAppReview = InAppReview.instance;
-      await inAppReview.openStoreListing(appStoreId: 'www.subzip.app');
-      await prefs.setBool('has_rated_subzip', true);
-    } catch (e) {
-      debugPrint('Rate prompt failed: $e');
+    if (action == 'rate') {
+      try {
+        final reviewService = ReviewService();
+        final requested = await reviewService.requestInAppReview();
+        if (requested) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text(
+                  'Review prompt requested. It can appear again later if you did not submit a review.',
+                ),
+                action: SnackBarAction(
+                  label: 'Open Store',
+                  onPressed: () {
+                    reviewService.openStoreReviewPage();
+                  },
+                ),
+              ),
+            );
+          }
+        } else if (mounted) {
+          final opened = await reviewService.openStoreReviewPage();
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                opened
+                    ? 'Opened Play Store review page.'
+                    : 'Review is not available right now.',
+              ),
+            ),
+          );
+        }
+      } catch (e) {
+        debugPrint('Rate prompt failed: $e');
+      }
     }
   }
 
@@ -277,6 +393,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 final name = controller.text.trim();
                 if (name.isNotEmpty) {
                   await fileSystem.createFolder(name);
+                  if (!context.mounted) return;
                   Navigator.pop(context);
                 }
               },
@@ -315,6 +432,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 final name = controller.text.trim();
                 if (name.isNotEmpty) {
                   await fileSystem.createFile(name);
+                  if (!context.mounted) return;
                   Navigator.pop(context);
                 }
               },
@@ -360,6 +478,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     await fileEntity.rename(newPath);
                   }
                   await fileSystem.refresh();
+                  if (!context.mounted) return;
                   Navigator.pop(context);
                 }
               },
@@ -406,13 +525,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   Navigator.pop(context);
                   fileSystem.clearSelection();
 
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'ZIP compression task started in background.',
-                      ),
-                    ),
-                  );
+                  Provider.of<AppStateProvider>(context, listen: false)
+                      .showBannerNotification('ZIP compression task started in background.');
                 }
               },
               child: const Text('Compress'),
@@ -499,11 +613,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     targetDir,
                     fileSystem,
                   );
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('ZIP extraction started in background.'),
-                    ),
-                  );
+                  Provider.of<AppStateProvider>(context, listen: false)
+                      .showBannerNotification('ZIP extraction started in background.');
                 },
                 child: const Text('Extract here'),
               ),
@@ -536,12 +647,8 @@ class _HomeScreenState extends State<HomeScreen> {
       });
     } else {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Directory does not exist: $cleanPath'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
+        Provider.of<AppStateProvider>(context, listen: false)
+            .showBannerNotification('Directory does not exist: $cleanPath', isError: true);
       }
     }
   }
@@ -624,7 +731,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   tooltip: 'Search Filters',
                   style: IconButton.styleFrom(
                     backgroundColor: _showSearchFilters
-                        ? appState.accentColor.withOpacity(0.12)
+                        ? appState.accentColor.withValues(alpha: 0.12)
                         : (isDark
                               ? const Color(0xFF1E1E1E)
                               : Colors.grey.shade100),
@@ -855,11 +962,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     Clipboard.setData(
                       ClipboardData(text: _pathController.text),
                     );
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Path copied to clipboard.'),
-                      ),
-                    );
+                    appState.showBannerNotification('Path copied to clipboard.');
                   },
                   style: IconButton.styleFrom(
                     padding: const EdgeInsets.all(8),
@@ -946,7 +1049,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       Icon(
                         Icons.folder_open_rounded,
                         size: 64,
-                        color: theme.colorScheme.outline.withOpacity(0.5),
+                        color: theme.colorScheme.outline.withValues(alpha: 0.5),
                       ),
                       const SizedBox(height: 16),
                       const Text(
@@ -1055,13 +1158,13 @@ class _HomeScreenState extends State<HomeScreen> {
               borderRadius: BorderRadius.circular(16),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.2),
+                  color: Colors.black.withValues(alpha: 0.2),
                   blurRadius: 10,
                   offset: const Offset(0, 4),
                 ),
               ],
               border: Border.all(
-                color: appState.accentColor.withOpacity(0.3),
+                color: appState.accentColor.withValues(alpha: 0.3),
                 width: 1.5,
               ),
             ),
@@ -1113,6 +1216,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   onPressed: () {
                     if (fileSystem.isCut) {
+                      if (_blockedByFavoriteProtection(
+                        context,
+                        fileSystem,
+                        fileSystem.clipboardPaths,
+                      )) {
+                        return;
+                      }
                       taskProvider.startMoveTask(
                         fileSystem.clipboardPaths,
                         fileSystem.currentPath,
@@ -1126,14 +1236,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       );
                     }
                     fileSystem.clearClipboard();
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          fileSystem.isCut
-                              ? 'Move task started in background.'
-                              : 'Copy task started in background.',
-                        ),
-                      ),
+                    appState.showBannerNotification(
+                      fileSystem.isCut
+                          ? 'Move task started in background.'
+                          : 'Copy task started in background.',
                     );
                   },
                   child: const Text(
@@ -1161,8 +1267,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   horizontal: 16,
                   vertical: 10,
                 ),
-                borderColor: appState.accentColor.withOpacity(0.3),
-                fillColor: appState.accentColor.withOpacity(0.1),
+                borderColor: appState.accentColor.withValues(alpha: 0.3),
+                fillColor: appState.accentColor.withValues(alpha: 0.1),
                 child: Row(
                   children: [
                     SizedBox(
@@ -1209,6 +1315,7 @@ class _HomeScreenState extends State<HomeScreen> {
     SharedFile file,
     String action,
   ) {
+    final appState = Provider.of<AppStateProvider>(context, listen: false);
     switch (action) {
       case 'style':
         _showFolderStyleDialog(context, fileSystem, file.path);
@@ -1216,21 +1323,23 @@ class _HomeScreenState extends State<HomeScreen> {
       case 'favorite':
         fileSystem.toggleFavorite(file.path);
         break;
+      case 'share':
+        appState.sharePaths(context, [file.path]);
+        break;
       case 'extract':
         final baseName = p.basenameWithoutExtension(file.path);
         final targetDir = p.join(fileSystem.currentPath, baseName);
         taskProvider.startExtractTask(file.path, targetDir, fileSystem);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Extraction task started in background.'),
-          ),
-        );
+        appState.showBannerNotification('Extraction task started in background.');
         break;
       case 'copy':
         fileSystem.toggleSelection(file.path);
         fileSystem.copySelected();
         break;
       case 'cut':
+        if (_blockedByFavoriteProtection(context, fileSystem, [file.path])) {
+          break;
+        }
         fileSystem.toggleSelection(file.path);
         fileSystem.cutSelected();
         break;
@@ -1241,6 +1350,9 @@ class _HomeScreenState extends State<HomeScreen> {
         fileSystem.toggleSelection(file.path);
         break;
       case 'delete':
+        if (_blockedByFavoriteProtection(context, fileSystem, [file.path])) {
+          break;
+        }
         showDialog(
           context: context,
           builder: (context) => AlertDialog(
@@ -1258,11 +1370,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 onPressed: () {
                   taskProvider.startDeleteTask([file.path], fileSystem);
                   Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Deletion task started in background.'),
-                    ),
-                  );
+                  appState.showBannerNotification('Deletion task started in background.');
                 },
                 child: const Text(
                   'Delete',
@@ -1293,11 +1401,7 @@ class _HomeScreenState extends State<HomeScreen> {
           type,
           fileSystem,
         );
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('PDF conversion task started in background.'),
-          ),
-        );
+        appState.showBannerNotification('PDF conversion task started in background.');
         break;
       case 'convert_word':
         final dir = p.dirname(file.path);
@@ -1309,13 +1413,52 @@ class _HomeScreenState extends State<HomeScreen> {
           'pdf_to_docx',
           fileSystem,
         );
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Word conversion task started in background.'),
-          ),
-        );
+        appState.showBannerNotification('Word conversion task started in background.');
         break;
     }
+  }
+
+  bool _blockedByFavoriteProtection(
+    BuildContext context,
+    FileSystemProvider fileSystem,
+    Iterable<String> paths,
+  ) {
+    final appState = Provider.of<AppStateProvider>(context, listen: false);
+    if (!appState.protectFavoritesFromDelete) return false;
+
+    final blockedPaths = fileSystem.protectedFavoritePathsFor(paths);
+    if (blockedPaths.isEmpty) return false;
+
+    final blockedName = p.basename(blockedPaths.first);
+    final message = blockedPaths.length == 1
+        ? '$blockedName is protected because it is in Favorites.'
+        : '${blockedPaths.length} favorite items are protected from deletion.';
+    appState.showBannerNotification(message, isError: true);
+    return true;
+  }
+
+  Future<void> _addCurrentFolderCategory(
+    BuildContext context,
+    FileSystemProvider fileSystem,
+    AppStateProvider appState,
+  ) async {
+    final currentPath = fileSystem.currentPath;
+    if (currentPath.trim().isEmpty ||
+        currentPath == 'Computer' ||
+        !Directory(currentPath).existsSync()) {
+      appState.showBannerNotification('Current location cannot be added.', isError: true);
+      return;
+    }
+
+    final defaultName = p.basename(currentPath).trim().isEmpty
+        ? currentPath
+        : p.basename(currentPath);
+    await appState.addFolderCategory(
+      label: defaultName,
+      folderPath: currentPath,
+    );
+    if (!mounted) return;
+    appState.showBannerNotification('$defaultName added to categories.');
   }
 
   @override
@@ -1339,16 +1482,7 @@ class _HomeScreenState extends State<HomeScreen> {
           },
           onOpenCategory: (category) {
             _searchController.clear();
-            fileSystem.setSearchQuery('');
-            fileSystem.setCategoryFilter(category);
-            fileSystem.setSearchScope('all_files');
-            if (Platform.isWindows) {
-              fileSystem.navigateInto('Computer');
-            } else if (Platform.isAndroid) {
-              fileSystem.navigateInto('/storage/emulated/0');
-            } else {
-              fileSystem.navigateInto('/');
-            }
+            fileSystem.openCategoryFromDashboard(category);
             setState(() {
               _currentNavIndex = 1;
             });
@@ -1395,16 +1529,7 @@ class _HomeScreenState extends State<HomeScreen> {
           },
           onOpenCategory: (category) {
             _searchController.clear();
-            fileSystem.setSearchQuery('');
-            fileSystem.setCategoryFilter(category);
-            fileSystem.setSearchScope('all_files');
-            if (Platform.isWindows) {
-              fileSystem.navigateInto('Computer');
-            } else if (Platform.isAndroid) {
-              fileSystem.navigateInto('/storage/emulated/0');
-            } else {
-              fileSystem.navigateInto('/');
-            }
+            fileSystem.openCategoryFromDashboard(category);
             setState(() {
               _currentNavIndex = 1;
             });
@@ -1415,7 +1540,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       appBar: fileSystem.isSelectionMode
           ? AppBar(
-              backgroundColor: appState.accentColor.withOpacity(0.12),
+              backgroundColor: appState.accentColor.withValues(alpha: 0.12),
               leading: IconButton(
                 icon: const Icon(Icons.close_rounded),
                 tooltip: 'Cancel selection',
@@ -1440,21 +1565,31 @@ class _HomeScreenState extends State<HomeScreen> {
                   tooltip: 'Copy',
                   onPressed: () {
                     fileSystem.copySelected();
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Items copied to clipboard.'),
-                      ),
-                    );
+                    appState.showBannerNotification('Items copied to clipboard.');
                   },
                 ),
                 IconButton(
                   icon: const Icon(Icons.cut_rounded),
                   tooltip: 'Cut',
                   onPressed: () {
+                    if (_blockedByFavoriteProtection(
+                      context,
+                      fileSystem,
+                      fileSystem.selectedPaths,
+                    )) {
+                      return;
+                    }
                     fileSystem.cutSelected();
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Items cut to clipboard.')),
-                    );
+                    appState.showBannerNotification('Items cut to clipboard.');
+                  },
+                ),
+                IconButton(
+                  icon: const Icon(Icons.share_rounded),
+                  tooltip: 'Share',
+                  onPressed: () {
+                    final selected = fileSystem.selectedPaths.toList();
+                    fileSystem.clearSelection();
+                    appState.sharePaths(context, selected);
                   },
                 ),
                 IconButton(
@@ -1474,6 +1609,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   tooltip: 'Delete',
                   onPressed: () {
+                    if (_blockedByFavoriteProtection(
+                      context,
+                      fileSystem,
+                      fileSystem.selectedPaths,
+                    )) {
+                      return;
+                    }
                     showDialog(
                       context: context,
                       builder: (context) => AlertDialog(
@@ -1497,11 +1639,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               );
                               Navigator.pop(context);
                               fileSystem.clearSelection();
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Deletion task started.'),
-                                ),
-                              );
+                              appState.showBannerNotification('Deletion task started.');
                             },
                             child: const Text(
                               'Delete',
@@ -1567,6 +1705,15 @@ class _HomeScreenState extends State<HomeScreen> {
                     tooltip: 'New File',
                     onPressed: () => _showCreateFileDialog(context, fileSystem),
                   ),
+                  IconButton(
+                    icon: const Icon(Icons.add_to_photos_rounded),
+                    tooltip: 'Add current folder to categories',
+                    onPressed: () => _addCurrentFolderCategory(
+                      context,
+                      fileSystem,
+                      appState,
+                    ),
+                  ),
                 ],
                 IconButton(
                   icon: const Icon(Icons.settings_rounded),
@@ -1582,15 +1729,28 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ],
             ),
-      body: bodyContent,
+      body: Column(
+        children: [
+          const AppNotificationBanner(),
+          Expanded(child: bodyContent),
+        ],
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentNavIndex,
         onDestinationSelected: (index) {
+          final fileSystem = Provider.of<FileSystemProvider>(
+            context,
+            listen: false,
+          );
+          if (index == 1) {
+            _searchController.clear();
+            fileSystem.resetExplorerToDefault(resetPath: true);
+          }
           setState(() {
             _currentNavIndex = index;
           });
         },
-        indicatorColor: appState.accentColor.withOpacity(0.2),
+        indicatorColor: appState.accentColor.withValues(alpha: 0.2),
         destinations: [
           const NavigationDestination(
             icon: Icon(Icons.dashboard_rounded),
